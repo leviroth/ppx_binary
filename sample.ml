@@ -1,2 +1,2 @@
-module M = [%binary [a, 1;
-                     b, 2]]
+type t = [%binary [a, int;
+                   b, char]]

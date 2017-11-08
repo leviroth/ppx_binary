@@ -21,12 +21,13 @@ let rec extract_list : Parsetree.expression -> (string * string) list =
   fun l ->
     let rec aux l acc =
       match l with
-      | {pexp_desc = Pexp_construct ({txt = Lident "::"; loc}, Some ({pexp_desc = Pexp_tuple [hd; tl]})) } -> aux tl @@ extract_tuple hd :: acc
-      | {pexp_desc = Pexp_construct ({txt = Lident "[]"; loc}, None) } -> List.rev acc
+      | {pexp_desc = Pexp_construct ({txt = Lident "::"; loc}, Some {pexp_desc = Pexp_tuple [hd; tl]}) } ->
+        aux tl @@ extract_tuple hd :: acc
+      | {pexp_desc = Pexp_construct ({txt = Lident "[]"; loc}, None) } ->
+        List.rev acc
       | {pexp_loc} -> raise @@ Location.Error (Location.error ~loc:pexp_loc "Expected list of field names and types")
     in
     aux l []
-
 
 let extract_payload : Parsetree.payload -> (string * string) list =
   function
@@ -37,14 +38,14 @@ let build_field (name, t_name) ~loc =
   let t = Typ.constr {txt = (Lident t_name); loc} [] in
   Type.field { txt = name ; loc} @@ t
 
-let getenv_mapper argv =
+let binary_mapper argv =
   { default_mapper with
     type_declaration = fun mapper type_declaration ->
       match type_declaration with
       | ({ ptype_manifest = Some ({ptyp_desc = Ptyp_extension ({ txt = "binary"; loc }, pstr)})} as x) ->
         { x with ptype_manifest = None;
-                 ptype_kind = Ptype_record (List.map (build_field ~loc) ["foo", "int"; "bar", "char"])}
+                 ptype_kind = Ptype_record (List.map (build_field ~loc) (extract_payload pstr))}
       | x -> default_mapper.type_declaration mapper x;
   }
 
-let () = register "getenv" getenv_mapper
+let () = register "binary" binary_mapper
