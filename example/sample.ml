@@ -1,5 +1,5 @@
-type t = [%binary [a, int;
-                   b, char]]
+type t = [%binary {a : int;
+                   b : char; }]
 
 let () =
   let foo = {a = 3;
