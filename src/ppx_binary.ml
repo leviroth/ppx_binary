@@ -1,3 +1,5 @@
+open Migrate_parsetree
+open Ast_406
 open Ast_mapper
 open Ast_helper
 open Asttypes
@@ -38,7 +40,7 @@ let build_field (name, t_name) ~loc =
   let t = Typ.constr {txt = (Lident t_name); loc} [] in
   Type.field { txt = name ; loc} @@ t
 
-let binary_mapper argv =
+let binary_mapper _config _cookies =
   { default_mapper with
     type_declaration = fun mapper type_declaration ->
       match type_declaration with
@@ -48,4 +50,5 @@ let binary_mapper argv =
       | x -> default_mapper.type_declaration mapper x;
   }
 
-let () = register "binary" binary_mapper
+let () =
+  Driver.register ~name:"binary" Versions.ocaml_406 binary_mapper

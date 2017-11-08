@@ -1,0 +1,6 @@
+(jbuild_version 1)
+
+(executables
+ ((names        (sample))
+  (preprocess (pps (ppx_binary)))
+  (libraries (ppx_binary))))

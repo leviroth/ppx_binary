@@ -1,0 +1,7 @@
+(jbuild_version 1)
+
+(library
+ ((name        ppx_binary)
+  (kind ppx_rewriter)
+  (synopsis "Convert records to and from binary data")
+  (libraries (ocaml-migrate-parsetree))))
