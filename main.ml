@@ -18,10 +18,15 @@ let extract_tuple : Parsetree.expression -> string * string =
   | {pexp_loc} -> raise @@ Location.Error (Location.error ~loc:pexp_loc "Expected two identifiers")
 
 let rec extract_list : Parsetree.expression -> (string * string) list =
-  function
-  | {pexp_desc = Pexp_construct ({txt = Lident "::"; loc}, Some ({pexp_desc = Pexp_tuple [hd; tl]})) } -> extract_tuple hd :: extract_list tl
-  | {pexp_desc = Pexp_construct ({txt = Lident "::"; loc}, None) } -> []
-  | _ -> raise @@ invalid_arg "foo"
+  fun l ->
+    let rec aux l acc =
+      match l with
+      | {pexp_desc = Pexp_construct ({txt = Lident "::"; loc}, Some ({pexp_desc = Pexp_tuple [hd; tl]})) } -> aux tl @@ extract_tuple hd :: acc
+      | {pexp_desc = Pexp_construct ({txt = Lident "[]"; loc}, None) } -> List.rev acc
+      | {pexp_loc} -> raise @@ Location.Error (Location.error ~loc:pexp_loc "Expected list of field names and types")
+    in
+    aux l []
+
 
 let extract_payload : Parsetree.payload -> (string * string) list =
   function
