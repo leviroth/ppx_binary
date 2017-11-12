@@ -3,4 +3,5 @@
 (executables
  ((names        (sample))
   (preprocess (pps (ppx_binary)))
+  (ocamlc_flags -dsource)
   (libraries (ppx_binary))))

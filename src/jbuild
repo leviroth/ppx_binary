@@ -4,4 +4,5 @@
  ((name        ppx_binary)
   (kind ppx_rewriter)
   (synopsis "Convert records to and from binary data")
-  (libraries (ocaml-migrate-parsetree))))
+  (preprocess (pps (ppx_metaquot)))
+  (libraries (ppx_type_conv ocaml-migrate-parsetree))))

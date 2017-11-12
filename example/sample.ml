@@ -1,7 +1,4 @@
-type t = [%binary {a : int;
-                   b : char; }]
+type t = {a : int;
+          b : string; } [@@deriving binary]
 
-let () =
-  let foo = {a = 3;
-             b = 'c'}
-  in print_int foo.a
+let g = read_t;;

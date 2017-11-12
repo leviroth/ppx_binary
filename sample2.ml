@@ -1,1 +1,1 @@
-let x = [%binary]
+let x = 3
