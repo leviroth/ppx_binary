@@ -1,7 +1,6 @@
 (jbuild_version 1)
 
 (executables
- ((names        (sample))
+ ((names        (example))
   (preprocess (pps (ppx_binary)))
-  (ocamlc_flags -dsource)
-  (libraries (ppx_binary))))
+  (libraries (stdint))))

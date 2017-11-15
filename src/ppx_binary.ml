@@ -4,36 +4,43 @@ open Ast_helper
 open Ppx_type_conv.Std
 let (@@) = Caml.(@@)
 
-let extract_record pexp_desc ~loc =
-  let aux = function
-    | {txt ; loc}, {pexp_desc = Pexp_constraint ({pexp_desc = Pexp_ident {txt = Lident t_name}},
-                                                 {ptyp_desc = Ptyp_constr ({txt = Lident t}, _)}); pexp_loc} -> (pexp_loc, (t_name, t))
-    | {loc}, _ -> Location.raise_errorf ~loc "Invalid record field"
-  in
-  match pexp_desc with
-  | Pexp_record (l, _) -> List.map ~f:aux l
-  | _ -> Location.raise_errorf ~loc "Expected list of field names and types"
+type typeinfo = {
+  module_name : string;
+  byte_size : int;
+}
 
-let extract_type_name = function
-  | { ptyp_desc = Ptyp_constr ({txt = Lident s}, []) } -> s
+let type_to_module =
+  Map.of_alist_exn (module String)
+    [
+      "uint8", {module_name = "Uint8"; byte_size = 1};
+      "uint16", {module_name = "Uint16"; byte_size = 2};
+      "uint24", {module_name = "Uint24"; byte_size = 3};
+      "uint32", {module_name = "Uint32"; byte_size = 4};
+      "uint40", {module_name = "Uint40"; byte_size = 5};
+      "uint48", {module_name = "Uint48"; byte_size = 6};
+      "uint56", {module_name = "Uint56"; byte_size = 7};
+      "uint64", {module_name = "Uint64"; byte_size = 8};
+      "uint128", {module_name = "Uint128"; byte_size = 16};
+      "int8", {module_name = "Int8"; byte_size = 1};
+      "int16", {module_name = "Int16"; byte_size = 2};
+      "int24", {module_name = "Int24"; byte_size = 3};
+      "int32", {module_name = "Int32"; byte_size = 4};
+      "int40", {module_name = "Int40"; byte_size = 5};
+      "int48", {module_name = "Int48"; byte_size = 6};
+      "int56", {module_name = "Int56"; byte_size = 7};
+      "int64", {module_name = "Int64"; byte_size = 8};
+      "int128", {module_name = "Int128"; byte_size = 16};
+    ]
+
+let extract_module_info = function
+  | { ptyp_desc = Ptyp_constr ({txt = Lident s}, []) } -> Map.find_exn type_to_module s
   | { ptyp_loc } -> Location.raise_errorf ~loc:ptyp_loc "Expected basic type"
 
-let extract_record' : label_declaration -> Location.t * (string * string) = function
-  | {pld_loc ; pld_name = {txt} ; pld_type} -> (pld_loc, (txt, extract_type_name pld_type))
-
-let extract_payload pstr loc =
-  match pstr with
-  | PStr [{pstr_desc = Pstr_eval ({pexp_desc; pexp_loc}, _)}] -> extract_record pexp_desc loc
-  | _ -> Location.raise_errorf ~loc "Expected list of field names and types"
-
-let build_field (loc, (name, t_name)) =
-  let t = Typ.constr {txt = (Lident t_name); loc} [] in
-  Type.field { txt = name ; loc} @@ t
-
-let get_type_byte_width = fun _ -> 2
+let get_type_byte_width = fun t -> (extract_module_info t).byte_size
 
 let single_field_assignment {pld_name; pld_type; pld_loc = loc} offset : value_binding =
-  let fn = evar ~loc @@ Printf.sprintf "U%s.of_bytes_little_endian" @@ extract_type_name pld_type in
+  let module_info = extract_module_info pld_type in
+  let fn = evar ~loc @@ Printf.sprintf "%s.of_bytes_little_endian" @@ module_info.module_name in
   let pat = ppat_var ~loc pld_name in
   let expr = [%expr [%e fn] buf (offset + [%e offset])] in
   value_binding ~loc ~pat ~expr
@@ -82,32 +89,21 @@ let reader_fn : label_declaration list -> string Asttypes.loc -> Location.t -> s
      pstr_loc = loc
     }
 
-
-
 let writer_fn : label_declaration list -> string Asttypes.loc -> Location.t -> structure_item =
   fun _ _ -> raise @@ Invalid_argument "not implemented"
 
-let f : type_declaration -> structure =
+let structure_of_td : type_declaration -> structure =
   function
   | { ptype_kind = Ptype_record l; ptype_name; ptype_loc } ->
     [reader_fn l ptype_name ptype_loc; ]
-(* writer_fn l ptype_name ptype_loc] *)
   | _ -> []
 
 module Gen_str = struct
   let generate ~loc ~path:_ (rec_flag, tds) =
-    List.concat_map ~f tds
-end
-
-module Gen_sig = struct
-  let generate ~loc ~path:_ (rec_flag, tds) =
-    let kind = Ptype_record (List.map ~f:build_field [!default_loc, ("foo", "int"); !default_loc, ("bar", "string")]) in
-    let new_sig = Sig.mk @@ Psig_type (Nonrecursive, [Type.mk ~kind {txt = "x"; loc = !default_loc}]) in
-    [new_sig]
+    List.concat_map ~f:structure_of_td tds
 end
 
 let () =
   Type_conv.add "binary"
     ~str_type_decl:(Type_conv.Generator.make_noarg Gen_str.generate)
-    ~sig_type_decl:(Type_conv.Generator.make_noarg Gen_sig.generate)
   |> Type_conv.ignore
