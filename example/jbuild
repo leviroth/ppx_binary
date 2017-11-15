@@ -1,6 +1,6 @@
 (jbuild_version 1)
 
 (executables
- ((names        (example))
+ ((names        (example bmp_header))
   (preprocess (pps (ppx_binary)))
   (libraries (stdint))))
