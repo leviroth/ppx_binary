@@ -79,7 +79,7 @@ let reader_fn : label_declaration list -> string Asttypes.loc -> Location.t -> s
         let lident_loc = lident_loc_of_string_loc pld_name in
         (lident_loc, pexp_ident ~loc lident_loc)) in
     let tail_expression = pexp_record ~loc record_fields None in
-    let fn_name = {type_name with txt = "read_" ^ type_name.txt } in
+    let fn_name = {type_name with txt = match type_name.txt with | "t" -> "of_bytes" | s -> s ^ "of_bytes"} in
     let binding = {pvb_pat = ppat_var ~loc fn_name;
                    pvb_expr = build_fn loc tail_expression l;
                    pvb_attributes = [];
