@@ -4,6 +4,12 @@ open Ast_helper
 open Ppx_type_conv.Std
 let (@@) = Caml.(@@)
 
+let endianness =
+  Attribute.declare "binary.endian"
+    Attribute.Context.label_declaration
+    Ast_pattern.(pstr (pstr_eval (pexp_ident (lident __)) nil ^:: nil))
+    (fun x -> x)
+
 type typeinfo = {
   module_name : string;
   byte_size : int;
@@ -38,10 +44,18 @@ let extract_module_info = function
 
 let get_type_byte_width = fun t -> (extract_module_info t).byte_size
 
-let single_field_assignment {pld_name; pld_type; pld_loc = loc} offset : value_binding =
-  let module_info = extract_module_info pld_type in
-  let fn = evar ~loc @@ Printf.sprintf "%s.of_bytes_little_endian" @@ module_info.module_name in
-  let pat = ppat_var ~loc pld_name in
+
+let single_field_assignment ld offset : value_binding =
+  let loc = ld.pld_loc in
+  let module_info = extract_module_info ld.pld_type in
+  let endianness =
+    match Attribute.get endianness ld with
+    | Some "little" -> "little"
+    | Some "big" -> "big"
+    | Some _ -> Location.raise_errorf ~loc "Unknown endianness"
+    | _ -> Location.raise_errorf ~loc "Expected endianness" in
+  let fn = evar ~loc @@ Printf.sprintf "%s.of_bytes_%s_endian" module_info.module_name endianness in
+  let pat = ppat_var ~loc ld.pld_name in
   let expr = [%expr [%e fn] buf (offset + [%e offset])] in
   value_binding ~loc ~pat ~expr
 
@@ -105,5 +119,5 @@ end
 
 let () =
   Type_conv.add "binary"
-    ~str_type_decl:(Type_conv.Generator.make_noarg Gen_str.generate)
+    ~str_type_decl:(Type_conv.Generator.make_noarg ~attributes:[Attribute.T endianness] Gen_str.generate)
   |> Type_conv.ignore

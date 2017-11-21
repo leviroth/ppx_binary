@@ -1,11 +1,11 @@
 open Stdint
 
 type t = {
-  bfType: uint16;
-  bfSize: uint32;
-  bfReserved1 : uint16;
-  bfReserved2 : uint16;
-  bfOffBits : uint32;
+  bfType: uint16 [@endian little];
+  bfSize: uint32 [@endian little];
+  bfReserved1 : uint16 [@endian little];
+  bfReserved2 : uint16 [@endian little];
+  bfOffBits : uint32 [@endian little];
 } [@@deriving binary]
 
 let () =
