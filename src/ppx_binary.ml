@@ -6,7 +6,7 @@ open Ppx_type_conv.Std
 let ( @@ ) = Caml.( @@ )
 
 let endianness =
-  Attribute.declare "binary.endian" Attribute.Context.label_declaration
+  Attribute.declare "binary.endianness" Attribute.Context.label_declaration
     Ast_pattern.(pstr (pstr_eval (pexp_ident (lident __)) nil ^:: nil))
     (fun x -> x )
 

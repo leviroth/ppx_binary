@@ -1,10 +1,8 @@
 open Stdint
 
 type t =
-  { a: int32 [@endian little]
-  ; b: uint8 [@endian little]
-  ; c: int16 [@endian little] }
-  [@@deriving binary]
+  {a: int32; b: uint8; c: int16}
+  [@@deriving binary ~endianness:"little"]
 
 let () =
   let buf = Bytes.of_string "fibjj12" in
