@@ -7,13 +7,13 @@ Using ppx_binary, we can create a reader function for this structure in ocaml:
 ```ocaml
 open Stdint
 
-type t = {
-  bfType: uint16 [@endian little];
-  bfSize: uint32 [@endian little];
-  bfReserved1 : uint16 [@endian little];
-  bfReserved2 : uint16 [@endian little];
-  bfOffBits : uint32 [@endian little];
-} [@@deriving binary]
+type t =
+  { bfType: uint16
+  ; bfSize: uint32
+  ; bfReserved1: uint16
+  ; bfReserved2: uint16
+  ; bfOffBits: uint32 }
+  [@@deriving binary ~endianness:"little"]
 ```
 
 This example produces a function `of_bytes : Bytes.t -> int -> t` that can be used
@@ -25,5 +25,6 @@ let () =
   let buf = Bytes.create 14 in
   let _ = input f buf 0 14 in
   let my_t = of_bytes buf 0 in
-  print_endline @@ Printf.sprintf "bfType: %s" @@ Uint16.to_string_hex my_t.bfType
+  print_endline @@ Printf.sprintf "bfType: %s"
+  @@ Uint16.to_string_hex my_t.bfType
 ```
