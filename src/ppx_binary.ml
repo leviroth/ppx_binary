@@ -11,6 +11,8 @@ let endianness =
     (fun x -> x )
 
 
+let lident_loc_of_string_loc x = {x with txt= Lident x.txt}
+
 type typeinfo = {module_name: string; byte_size: int}
 
 let type_to_module =
@@ -36,12 +38,6 @@ let type_to_module =
     ; ("int128", {module_name= "Int128"; byte_size= 16}) ]
 
 
-let writer_fn
-    : label_declaration list -> string Asttypes.loc -> Location.t
-      -> structure_item =
-  fun _ _ -> raise @@ Invalid_argument "not implemented"
-
-
 module Gen_str = struct
   let generate ~loc ~path:_ (rec_flag, tds) default_endianness =
     let get_default_endianness ~loc =
@@ -57,7 +53,7 @@ module Gen_str = struct
       | {ptyp_loc} -> Location.raise_errorf ~loc:ptyp_loc "Expected basic type"
     in
     let get_type_byte_width t = (extract_module_info t).byte_size in
-    let single_field_assignment ld offset : value_binding =
+    let read_or_write_expression ld offset direction =
       let loc = ld.pld_loc in
       let module_info = extract_module_info ld.pld_type in
       let endianness =
@@ -68,16 +64,27 @@ module Gen_str = struct
               "Default endianness must be little or big"
         | None -> get_default_endianness ~loc
       in
-      let fn =
-        evar ~loc
-        @@ Printf.sprintf "%s.of_bytes_%s_endian" module_info.module_name
-             endianness
-      in
-      let pat = ppat_var ~loc ld.pld_name in
-      let expr = [%expr [%e fn] buf (offset + [%e offset])] in
-      value_binding ~loc ~pat ~expr
+      match direction with
+      | `Read ->
+          let fn =
+            evar ~loc
+            @@ Printf.sprintf "%s.of_bytes_%s_endian" module_info.module_name
+                 endianness
+          in
+          [%expr [%e fn] buf (offset + [%e offset])]
+      | `Write ->
+          let fn =
+            evar ~loc
+            @@ Printf.sprintf "%s.to_bytes_%s_endian" module_info.module_name
+                 endianness
+          in
+          let data_field =
+            pexp_field ~loc [%expr data]
+            @@ lident_loc_of_string_loc ld.pld_name
+          in
+          [%expr [%e fn] [%e data_field] buf (offset + [%e offset])]
     in
-    let build_field_assignments : label_declaration list -> value_binding list =
+    let build_exprs l direction =
       let rec aux l offset acc =
         match l with
         | [] -> List.rev acc
@@ -88,9 +95,38 @@ module Gen_str = struct
             in
             aux tl
               (offset + get_type_byte_width hd.pld_type)
-              (single_field_assignment hd offset_expr :: acc)
+              (read_or_write_expression hd offset_expr direction :: acc)
       in
-      fun l -> aux l 0 []
+      aux l 0 []
+    in
+    let build_field_assignments : label_declaration list -> value_binding list =
+      fun l ->
+        let pats = List.map l ~f:(fun ld -> ppat_var ~loc ld.pld_name) in
+        let exprs = build_exprs l `Read in
+        List.map2_exn pats exprs ~f:(fun pat expr ->
+            value_binding ~loc ~pat ~expr )
+    in
+    let writer_fn
+        : label_declaration list -> string Asttypes.loc -> Location.t
+          -> structure_item =
+      fun lds type_name loc ->
+        let fn_name =
+          { type_name with
+            txt=
+              ( match type_name.txt with
+              | "t" -> "to_bytes"
+              | s -> s ^ "_to_bytes" ) }
+        in
+        let reads = build_exprs lds `Write in
+        let expr = esequence loc reads in
+        let expr = [%expr fun data buf offset -> [%e expr]] in
+        let binding =
+          { pvb_pat= ppat_var ~loc fn_name
+          ; pvb_expr= expr
+          ; pvb_attributes= []
+          ; pvb_loc= loc }
+        in
+        {pstr_desc= Pstr_value (Nonrecursive, [binding]); pstr_loc= loc}
     in
     let stitch l final loc =
       let rec aux l acc =
@@ -107,7 +143,6 @@ module Gen_str = struct
         let expr = stitch assignments final_expression loc in
         [%expr fun buf offset -> [%e expr]]
     in
-    let lident_loc_of_string_loc x = {x with txt= Lident x.txt} in
     let reader_fn
         : label_declaration list -> string Asttypes.loc -> Location.t
           -> structure_item =
@@ -123,7 +158,7 @@ module Gen_str = struct
             txt=
               ( match type_name.txt with
               | "t" -> "of_bytes"
-              | s -> s ^ "of_bytes" ) }
+              | s -> s ^ "_of_bytes" ) }
         in
         let binding =
           { pvb_pat= ppat_var ~loc fn_name
@@ -135,7 +170,7 @@ module Gen_str = struct
     in
     let structure_of_td : type_declaration -> structure = function
       | {ptype_kind= Ptype_record l; ptype_name; ptype_loc} ->
-          [reader_fn l ptype_name ptype_loc]
+          [reader_fn l ptype_name ptype_loc; writer_fn l ptype_name ptype_loc]
       | _ -> []
     in
     List.concat_map ~f:structure_of_td tds
