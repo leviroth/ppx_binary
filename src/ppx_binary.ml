@@ -177,11 +177,44 @@ module Gen_str = struct
 
 end
 
+module Gen_sig = struct
+  let reader_type ~loc ty = [%type : Bytes.t -> int -> [%t ty]]
+
+  let writer_type ~loc ty = [%type : [%t ty] -> Bytes.t -> int -> unit]
+
+  let generate ~loc ~path:_ (rec_flag, tds) =
+    let reader_fn_item ({ptype_name; ptype_loc= loc} as td) =
+      let type_ = combinator_type_of_type_declaration td ~f:reader_type in
+      let fn_name =
+        match ptype_name.txt with "t" -> "of_bytes" | s -> s ^ "_of_bytes"
+      in
+      psig_value ~loc
+      @@ value_description ~loc ~name:{ptype_name with txt= fn_name} ~type_
+           ~prim:[]
+    in
+    let writer_fn_item ({ptype_name; ptype_loc= loc} as td) =
+      let type_ = combinator_type_of_type_declaration td ~f:writer_type in
+      let fn_name =
+        match ptype_name.txt with "t" -> "to_bytes" | s -> s ^ "_to_bytes"
+      in
+      psig_value ~loc
+      @@ value_description ~loc ~name:{ptype_name with txt= fn_name} ~type_
+           ~prim:[]
+    in
+    let structure_of_td : type_declaration -> signature = function
+      | {ptype_kind= Ptype_record _; ptype_name; ptype_loc} as td ->
+          [reader_fn_item td; writer_fn_item td]
+      | _ -> []
+    in
+    List.concat_map ~f:structure_of_td tds
+
+end
+
 let () =
   Type_conv.add "binary"
     ~str_type_decl:
       (Type_conv.Generator.make ~attributes:[Attribute.T endianness]
          Type_conv.Args.(empty +> arg "endianness" (estring __))
          Gen_str.generate)
+    ~sig_type_decl:(Type_conv.Generator.make_noarg Gen_sig.generate)
   |> Type_conv.ignore
-
