@@ -2,5 +2,4 @@
 
 (executables
  ((names        (example bmp_header))
-  (preprocess (pps (ppx_binary)))
-  (libraries (stdint))))
+  (preprocess (pps (ppx_binary)))))
