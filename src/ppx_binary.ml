@@ -16,8 +16,7 @@ let lident_loc_of_string_loc x = {x with txt= Lident x.txt}
 type typeinfo = {module_name: string; byte_size: int}
 
 let type_to_module =
-  Map.of_alist_exn
-    (module String)
+  String_dict.of_alist_exn
     [ ("uint8", {module_name= "Uint8"; byte_size= 1})
     ; ("uint16", {module_name= "Uint16"; byte_size= 2})
     ; ("uint24", {module_name= "Uint24"; byte_size= 3})
@@ -49,7 +48,7 @@ module Gen_str = struct
     in
     let extract_module_info = function
       | {ptyp_desc= Ptyp_constr ({txt= Lident s}, [])} ->
-          Map.find_exn type_to_module s
+          String_dict.find_exn type_to_module s
       | {ptyp_loc} -> Location.raise_errorf ~loc:ptyp_loc "Expected basic type"
     in
     let get_type_byte_width t = (extract_module_info t).byte_size in
