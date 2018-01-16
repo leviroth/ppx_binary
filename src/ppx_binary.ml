@@ -11,31 +11,27 @@ let endianness =
 
 let lident_loc_of_string_loc x = {x with txt= Lident x.txt}
 
-type typeinfo = {module_name: string; byte_size: int}
-
-let type_to_module =
-  String_dict.of_alist_exn
-    [ ("uint8", {module_name= "Uint8"; byte_size= 1})
-    ; ("uint16", {module_name= "Uint16"; byte_size= 2})
-    ; ("uint24", {module_name= "Uint24"; byte_size= 3})
-    ; ("uint32", {module_name= "Uint32"; byte_size= 4})
-    ; ("uint40", {module_name= "Uint40"; byte_size= 5})
-    ; ("uint48", {module_name= "Uint48"; byte_size= 6})
-    ; ("uint56", {module_name= "Uint56"; byte_size= 7})
-    ; ("uint64", {module_name= "Uint64"; byte_size= 8})
-    ; ("uint128", {module_name= "Uint128"; byte_size= 16})
-    ; ("int8", {module_name= "Int8"; byte_size= 1})
-    ; ("int16", {module_name= "Int16"; byte_size= 2})
-    ; ("int24", {module_name= "Int24"; byte_size= 3})
-    ; ("int32", {module_name= "Int32"; byte_size= 4})
-    ; ("int40", {module_name= "Int40"; byte_size= 5})
-    ; ("int48", {module_name= "Int48"; byte_size= 6})
-    ; ("int56", {module_name= "Int56"; byte_size= 7})
-    ; ("int64", {module_name= "Int64"; byte_size= 8})
-    ; ("int128", {module_name= "Int128"; byte_size= 16}) ]
-
-
 module Gen_str = struct
+  let size lds name loc =
+    let sizes =
+      List.map lds ~f:(fun {pld_type} ->
+          match pld_type with
+          | {ptyp_desc= Ptyp_constr ({txt}, []); ptyp_loc=loc} ->
+            Typeinfo.size_expr ~loc txt
+          | {ptyp_loc} ->
+            Location.raise_errorf ~loc:ptyp_loc "Could not handle type")
+    in
+    let size_expr =
+      List.reduce_exn sizes ~f:(fun x y -> [%expr [%e x] + [%e y]])
+    in
+    let name = match name with
+      | {txt="t"} -> [%pat? byte_size]
+      | {txt=s} ->
+        let s = Printf.sprintf "byte_size_%s" s in
+        ppat_var ~loc {txt=s; loc}
+    in
+    [%stri let [%p name] = [%e size_expr]]
+
   let generate ~loc ~path:_ (rec_flag, tds) default_endianness =
     let get_default_endianness ~loc =
       match default_endianness with
@@ -44,15 +40,13 @@ module Gen_str = struct
           Location.raise_errorf ~loc "Default endianness must be little or big"
       | None -> Location.raise_errorf ~loc "Default endianness required"
     in
-    let extract_module_info = function
-      | {ptyp_desc= Ptyp_constr ({txt= Lident s}, [])} ->
-          String_dict.find_exn type_to_module s
-      | {ptyp_loc} -> Location.raise_errorf ~loc:ptyp_loc "Expected basic type"
+    let extract_type_name = function
+      | {ptyp_desc= Ptyp_constr ({txt}, [])} -> txt
+      | {ptyp_loc} -> Location.raise_errorf ~loc:ptyp_loc "Could not handle type"
     in
-    let get_type_byte_width t = (extract_module_info t).byte_size in
-    let read_or_write_expression ld offset direction =
+    let read_or_write_expression ld direction =
       let loc = ld.pld_loc in
-      let module_info = extract_module_info ld.pld_type in
+      let type_name = extract_type_name ld.pld_type in
       let endianness =
         match Attribute.get endianness ld with
         | Some ("little" | "big" as s) -> s
@@ -64,66 +58,29 @@ module Gen_str = struct
       match direction with
       | `Read ->
           let fn =
-            evar ~loc
-            @@ Printf.sprintf "%s.of_bytes_%s_endian" module_info.module_name
-                 endianness
+            Exp.mk ~loc
+            @@ Pexp_ident {txt=Typeinfo.reader_name ~endianness type_name; loc}
           in
-          [%expr [%e fn] buf (offset + [%e offset])]
+          let offset_increment = Typeinfo.size_expr ~loc type_name in
+          let offset_expr = [%expr offset + [%e offset_increment]] in
+          [%expr [%e fn] buf offset, [%e offset_expr]]
       | `Write ->
           let fn =
-            evar ~loc
-            @@ Printf.sprintf "%s.to_bytes_%s_endian" module_info.module_name
-                 endianness
+            Exp.mk ~loc
+            @@ Pexp_ident {txt=Typeinfo.writer_name ~endianness type_name; loc}
           in
           let data_field =
             pexp_field ~loc [%expr data]
             @@ lident_loc_of_string_loc ld.pld_name
           in
-          [%expr [%e fn] [%e data_field] buf (offset + [%e offset])]
-    in
-    let build_exprs l direction =
-      let rec aux l offset acc =
-        match l with
-        | [] -> List.rev acc
-        | hd :: tl ->
-            let offset_expr =
-              pexp_constant ~loc:hd.pld_loc
-              @@ Pconst_integer (Int.to_string offset, None)
-            in
-            aux tl
-              (offset + get_type_byte_width hd.pld_type)
-              (read_or_write_expression hd offset_expr direction :: acc)
-      in
-      aux l 0 []
+          [%expr [%e fn] [%e data_field] buf offset]
     in
     let build_field_assignments : label_declaration list -> value_binding list =
       fun l ->
         let pats = List.map l ~f:(fun ld -> ppat_var ~loc ld.pld_name) in
-        let exprs = build_exprs l `Read in
+        let exprs = List.map l ~f:(fun ld -> read_or_write_expression ld `Read) in
         List.map2_exn pats exprs ~f:(fun pat expr ->
-            value_binding ~loc ~pat ~expr )
-    in
-    let writer_fn
-        : label_declaration list -> string Asttypes.loc -> Location.t
-          -> structure_item =
-      fun lds type_name loc ->
-        let fn_name =
-          { type_name with
-            txt=
-              ( match type_name.txt with
-              | "t" -> "to_bytes"
-              | s -> s ^ "_to_bytes" ) }
-        in
-        let reads = build_exprs lds `Write in
-        let expr = esequence loc reads in
-        let expr = [%expr fun data buf offset -> [%e expr]] in
-        let binding =
-          { pvb_pat= ppat_var ~loc fn_name
-          ; pvb_expr= expr
-          ; pvb_attributes= []
-          ; pvb_loc= loc }
-        in
-        {pstr_desc= Pstr_value (Nonrecursive, [binding]); pstr_loc= loc}
+            value_binding ~loc ~pat:[%pat? [%p pat], offset] ~expr )
     in
     let stitch l final loc =
       let rec aux l acc =
@@ -134,15 +91,42 @@ module Gen_str = struct
       aux (List.rev l) final
     in
     let build_fn
-        : location -> expression -> label_declaration list -> expression =
+      : location -> expression -> label_declaration list -> expression =
       fun loc final_expression label_declarations ->
         let assignments = build_field_assignments label_declarations in
         let expr = stitch assignments final_expression loc in
         [%expr fun buf offset -> [%e expr]]
     in
+    let writer_fn =
+      fun lds type_name loc ->
+        let fn_name =
+          { type_name with
+            txt=
+              ( match type_name.txt with
+              | "t" -> "to_bytes"
+              | s -> s ^ "_to_bytes" ) }
+        in
+        let writes = List.map lds ~f:(fun ld ->
+            let type_name = extract_type_name ld.pld_type in
+            let offset_increment = Typeinfo.size_expr ~loc type_name in
+            let offset_expr = [%expr offset + [%e offset_increment]] in
+            let read_expr = read_or_write_expression ld `Write in
+            let expr = [%expr [%e read_expr], [%e offset_expr]] in
+            value_binding ~loc ~pat:[%pat? (), offset] ~expr)
+        in
+        let expr = stitch writes [%expr ()] loc in
+        let expr = [%expr fun data buf offset -> [%e expr]] in
+        let binding =
+          { pvb_pat= ppat_var ~loc fn_name
+          ; pvb_expr= expr
+          ; pvb_attributes= []
+          ; pvb_loc= loc }
+        in
+        {pstr_desc= Pstr_value (Nonrecursive, [binding]); pstr_loc= loc}
+    in
     let reader_fn
-        : label_declaration list -> string Asttypes.loc -> Location.t
-          -> structure_item =
+      : label_declaration list -> string Asttypes.loc -> Location.t
+        -> structure_item =
       fun l type_name loc ->
         let record_fields =
           List.map l ~f:(fun {pld_name; pld_loc} ->
@@ -154,8 +138,8 @@ module Gen_str = struct
           { type_name with
             txt=
               ( match type_name.txt with
-              | "t" -> "of_bytes"
-              | s -> s ^ "_of_bytes" ) }
+                | "t" -> "of_bytes"
+                | s -> s ^ "_of_bytes" ) }
         in
         let binding =
           { pvb_pat= ppat_var ~loc fn_name
@@ -167,7 +151,9 @@ module Gen_str = struct
     in
     let structure_of_td : type_declaration -> structure = function
       | {ptype_kind= Ptype_record l; ptype_name; ptype_loc} ->
-          [reader_fn l ptype_name ptype_loc; writer_fn l ptype_name ptype_loc]
+        [size l ptype_name ptype_loc;
+         reader_fn l ptype_name ptype_loc;
+         writer_fn l ptype_name ptype_loc]
       | _ -> []
     in
     List.concat_map ~f:structure_of_td tds
@@ -200,7 +186,27 @@ module Gen_sig = struct
     in
     let structure_of_td : type_declaration -> signature = function
       | {ptype_kind= Ptype_record _; ptype_name; ptype_loc} as td ->
-          [reader_fn_item td; writer_fn_item td]
+        let size_item =
+          let size_name = {
+            ptype_name with txt =
+                              match ptype_name.txt with
+                              | "t" -> "byte_size"
+                              | s -> Printf.sprintf "byte_size_%s" s}
+          in
+          {psig_desc =
+             Psig_value
+               (Ast_builder.Default.value_description
+                  ~loc:ptype_loc
+                  ~name:size_name
+                  ~type_:(ptyp_constr
+                            ~loc:ptype_loc
+                            {txt=lident "int"; loc=ptype_loc}
+                            [])
+                  ~prim:[]);
+           psig_loc = ptype_loc}
+        in
+        [size_item;
+         reader_fn_item td; writer_fn_item td]
       | _ -> []
     in
     List.concat_map ~f:structure_of_td tds
