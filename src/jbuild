@@ -6,4 +6,4 @@
   (ppx_runtime_libraries (stdint))
   (synopsis "Convert records to and from binary data")
   (preprocess (pps (ppx_metaquot)))
-  (libraries (ppx_type_conv ocaml-migrate-parsetree))))
+  (libraries (ppx_type_conv))))
