@@ -13,5 +13,5 @@ let () =
   let x = M.of_bytes buf 0 in
   print_endline @@ Uint8.to_string x.b ;
   M.to_bytes x buf 0 ;
-  print_endline buf
+  print_endline @@ Bytes.to_string buf
 
