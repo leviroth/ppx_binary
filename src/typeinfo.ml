@@ -28,7 +28,11 @@ let get_name ~direction_string ?endianness typ =
   match typ with
   | Lident s -> (match String_dict.find known_types s with
       | Some {module_name} ->
-        let endianness = Option.value_exn endianness in
+        let endianness =
+          match endianness with
+          | Some e -> e
+          | None -> Location.raise_errorf "Endianness required"
+        in
         Ldot (lident module_name,
               Printf.sprintf "%s_bytes_%s_endian"
                 direction_string

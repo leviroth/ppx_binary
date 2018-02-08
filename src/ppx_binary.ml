@@ -44,11 +44,11 @@ module Gen_str = struct
 
   let generate ~loc ~path:_ (rec_flag, tds) default_endianness =
     let get_default_endianness ~loc =
-      match default_endianness with
-      | Some ("little" | "big" as s) -> s
-      | Some _ ->
-          Location.raise_errorf ~loc "Default endianness must be little or big"
-      | None -> Location.raise_errorf ~loc "Default endianness required"
+      Option.map default_endianness ~f:(function
+          | "little" | "big" as s -> s
+          | _ ->
+            Location.raise_errorf ~loc
+              "Default endianness must be little or big")
     in
     let extract_type_name = function
       | {ptyp_desc= Ptyp_constr ({txt}, [])} -> txt
@@ -63,17 +63,17 @@ module Gen_str = struct
       in
       let endianness =
         match Attribute.get endianness ld with
-        | Some ("little" | "big" as s) -> s
+        | Some ("little" | "big" as s) -> Some s
         | Some _ ->
             Location.raise_errorf ~loc
-              "Default endianness must be little or big"
+              "Endianness must be little or big"
         | None -> get_default_endianness ~loc
       in
       match direction with
       | `Read ->
           let fn =
             Exp.mk ~loc
-            @@ Pexp_ident {txt=Typeinfo.reader_name ~endianness type_name; loc}
+            @@ Pexp_ident {txt=Typeinfo.reader_name ?endianness type_name; loc}
           in
           let fn =
             match Attribute.get masking ld with
@@ -94,7 +94,7 @@ module Gen_str = struct
       | `Write ->
           let fn =
             Exp.mk ~loc
-            @@ Pexp_ident {txt=Typeinfo.writer_name ~endianness type_name; loc}
+            @@ Pexp_ident {txt=Typeinfo.writer_name ?endianness type_name; loc}
           in
           let fn =
             match Attribute.get masking ld with
