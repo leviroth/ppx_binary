@@ -1,5 +1,8 @@
 (jbuild_version 1)
 
 (executables
- ((names        (bmp_header cs50 example))
+ ((names        (bmp_header
+                 cs50
+                 cs50_ints
+                 example))
   (preprocess (pps (ppx_binary)))))
