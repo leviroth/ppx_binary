@@ -46,6 +46,26 @@ let get_name ~direction_string ?endianness typ =
     Ldot (t, new_s)
   | _ -> Location.raise_errorf "Lapply not implemented"
 
+let get_int_converter ~direction_string typ =
+  match typ with
+  | Lident s -> (match String_dict.find known_types s with
+      | Some {module_name} ->
+        Ldot (lident module_name,
+              Printf.sprintf "%s_int"
+                direction_string)
+      | None ->
+        match s with
+        | "t" -> lident @@ Printf.sprintf "%s_int" direction_string
+        | s -> lident @@ Printf.sprintf "%s_%s_int" s direction_string)
+  | Ldot (t, s) ->
+    let new_s =
+      match s with
+      | "t" -> Printf.sprintf "%s_int" direction_string
+      | s -> Printf.sprintf "%s_%s_int" s direction_string
+    in
+    Ldot (t, new_s)
+  | _ -> Location.raise_errorf "Lapply not implemented"
+
 let reader_name = get_name ~direction_string:"of"
 let writer_name = get_name ~direction_string:"to"
 

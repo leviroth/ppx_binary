@@ -8,15 +8,25 @@ let endianness =
     Ast_pattern.(pstr (pstr_eval (pexp_ident (lident __)) nil ^:: nil))
     (fun x -> x )
 
+let masking =
+  Attribute.declare "binary.masking" Attribute.Context.label_declaration
+    Ast_pattern.(pstr (pstr_eval (pexp_ident (lident __)) nil ^:: nil))
+    (fun x -> x )
+
 
 let lident_loc_of_string_loc x = {x with txt= Lident x.txt}
 
 module Gen_str = struct
   let size lds name loc =
     let sizes =
-      List.map lds ~f:(fun {pld_type} ->
+      List.map lds ~f:(fun ({pld_type} as ld) ->
           match pld_type with
           | {ptyp_desc= Ptyp_constr ({txt}, []); ptyp_loc=loc} ->
+            let txt =
+              match Attribute.get masking ld with
+              | None -> txt
+              | Some s -> Lident s
+            in
             Typeinfo.size_expr ~loc txt
           | {ptyp_loc} ->
             Location.raise_errorf ~loc:ptyp_loc "Could not handle type")
@@ -46,7 +56,11 @@ module Gen_str = struct
     in
     let read_or_write_expression ld direction =
       let loc = ld.pld_loc in
-      let type_name = extract_type_name ld.pld_type in
+      let type_name =
+        match Attribute.get masking ld with
+        | Some s -> Lident s
+        | None -> extract_type_name ld.pld_type
+      in
       let endianness =
         match Attribute.get endianness ld with
         | Some ("little" | "big" as s) -> s
@@ -61,6 +75,19 @@ module Gen_str = struct
             Exp.mk ~loc
             @@ Pexp_ident {txt=Typeinfo.reader_name ~endianness type_name; loc}
           in
+          let fn =
+            match Attribute.get masking ld with
+            | None -> fn
+            | Some _ ->
+              let converter =
+                let txt =
+                  Typeinfo.get_int_converter ~direction_string:"to" type_name
+                in
+                Exp.mk ~loc @@ Pexp_ident {txt; loc}
+              in
+              [%expr (fun buf offset -> [%e fn] buf offset |> [%e converter])]
+          in
+          (* (match type_name with Lident s | Ldot (_, s)-> print_endline s | _ -> assert false); *)
           let offset_increment = Typeinfo.size_expr ~loc type_name in
           let offset_expr = [%expr offset + [%e offset_increment]] in
           [%expr [%e fn] buf offset, [%e offset_expr]]
@@ -68,6 +95,18 @@ module Gen_str = struct
           let fn =
             Exp.mk ~loc
             @@ Pexp_ident {txt=Typeinfo.writer_name ~endianness type_name; loc}
+          in
+          let fn =
+            match Attribute.get masking ld with
+            | None -> fn
+            | Some _ ->
+              let converter =
+                let txt =
+                  Typeinfo.get_int_converter ~direction_string:"of" type_name
+                in
+                Exp.mk ~loc @@ Pexp_ident {txt; loc}
+              in
+              [%expr (fun data buf offset -> let data = [%e converter] data in [%e fn] data buf offset)]
           in
           let data_field =
             pexp_field ~loc [%expr data]
@@ -108,6 +147,11 @@ module Gen_str = struct
         in
         let writes = List.map lds ~f:(fun ld ->
             let type_name = extract_type_name ld.pld_type in
+            let type_name =
+              match Attribute.get masking ld with
+              | Some s -> Lident s
+              | None -> type_name
+            in
             let offset_increment = Typeinfo.size_expr ~loc type_name in
             let offset_expr = [%expr offset + [%e offset_increment]] in
             let read_expr = read_or_write_expression ld `Write in
