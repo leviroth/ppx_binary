@@ -97,8 +97,6 @@ let size factor infoheader =
   , new_padding )
 
 
-let add_size dword native_int = Uint32.(dword + of_int native_int)
-
 let read_scanline ic width padding =
   let pixels = List.init width (fun _ -> Pixel.of_channel ic) in
   seek_in ic @@ pos_in ic + padding ;
