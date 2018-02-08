@@ -30,35 +30,37 @@ struct
 end
 
 module Bitmapfileheader = struct
-  module T = struct
-    type t =
-      { bfType: int [@masking uint16]
-      ; bfSize: int [@masking uint32]
-      ; bfReserved1: int [@masking uint16]
-      ; bfReserved2: int [@masking uint16]
-      ; bfOffBits: int [@masking uint32] }
-      [@@deriving binary ~endianness:"little"]
-  end
-
-  include T
-  include RW (T)
+  type t =
+    { bfType: int [@masking uint16]
+    ; bfSize: int [@masking uint32]
+    ; bfReserved1: int [@masking uint16]
+    ; bfReserved2: int [@masking uint16]
+    ; bfOffBits: int [@masking uint32] }
+    [@@deriving binary ~endianness:"little"]
 end
 
 module Bitmapinfoheader = struct
+  type t =
+    { biSize: int [@masking uint32]
+    ; biWidth: int [@masking int32]
+    ; biHeight: int [@masking int32]
+    ; biPlanes: int [@masking uint16]
+    ; biBitCount: int [@masking uint16]
+    ; biCompression: int [@masking uint32]
+    ; biSizeImage: int [@masking uint32]
+    ; biXPelsPerMeter: int [@masking int32]
+    ; biYPelsPerMeter: int [@masking int32]
+    ; biClrUsed: int [@masking uint32]
+    ; biClrImportant: int [@masking uint32] }
+  [@@deriving binary ~endianness:"little"]
+end
+
+module Header = struct
   module T = struct
     type t =
-      { biSize: int [@masking uint32]
-      ; biWidth: int [@masking int32]
-      ; biHeight: int [@masking int32]
-      ; biPlanes: int [@masking uint16]
-      ; biBitCount: int [@masking uint16]
-      ; biCompression: int [@masking uint32]
-      ; biSizeImage: int [@masking uint32]
-      ; biXPelsPerMeter: int [@masking int32]
-      ; biYPelsPerMeter: int [@masking int32]
-      ; biClrUsed: int [@masking uint32]
-      ; biClrImportant: int [@masking uint32] }
-      [@@deriving binary ~endianness:"little"]
+      { fileheader : Bitmapfileheader.t
+      ; infoheader : Bitmapinfoheader.t }
+    [@@deriving binary]
   end
 
   include T
@@ -68,7 +70,9 @@ end
 module Pixel = struct
   module T = struct
     type t =
-      {rgbtBlue: uint8; rgbtGreen: uint8; rgbtRed: uint8}
+      { rgbtBlue: int [@masking uint8]
+      ; rgbtGreen: int [@masking uint8]
+      ; rgbtRed: int [@masking uint8] }
       [@@deriving binary ~endianness:"little"]
   end
 
@@ -114,22 +118,22 @@ let write_scanline oc line padding =
 
 
 let resize factor ic oc =
-  let fileheader = Bitmapfileheader.of_channel ic in
-  let infoheader = Bitmapinfoheader.of_channel ic in
-  let old_padding = padding infoheader.biWidth in
-  let new_infoheader, new_padding = size factor infoheader in
+  let header = Header.of_channel ic in
+  let old_padding = padding header.infoheader.biWidth in
+  let new_infoheader, new_padding = size factor header.infoheader in
   let new_fileheader =
-    { fileheader with
+    { header.fileheader with
       bfSize=
         new_infoheader.biSizeImage +
           Bitmapfileheader.byte_size + Bitmapinfoheader.byte_size }
   in
+  let new_header = Header.{fileheader = new_fileheader;
+                           infoheader = new_infoheader} in
   let new_padding = padding new_infoheader.biWidth in
-  Bitmapfileheader.to_channel oc new_fileheader ;
-  Bitmapinfoheader.to_channel oc new_infoheader ;
-  for _ = 1 to abs infoheader.biHeight do
+  Header.to_channel oc new_header ;
+  for _ = 1 to abs header.infoheader.biHeight do
     let line =
-      read_scanline ic infoheader.biWidth old_padding
+      read_scanline ic header.infoheader.biWidth old_padding
     in
     let new_line = expand_list line factor in
     for _ = 1 to factor do write_scanline oc new_line new_padding done
