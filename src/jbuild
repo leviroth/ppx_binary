@@ -5,5 +5,6 @@
   (kind ppx_rewriter)
   (ppx_runtime_libraries (stdint))
   (synopsis "Convert records to and from binary data")
+  (flags (:standard -short-paths))
   (preprocess (pps (ppx_metaquot)))
   (libraries (ppx_type_conv))))

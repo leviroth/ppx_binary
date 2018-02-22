@@ -5,4 +5,5 @@
                  cs50
                  cs50_ints
                  example))
+  (flags (:standard -short-paths))
   (preprocess (pps (ppx_binary)))))
