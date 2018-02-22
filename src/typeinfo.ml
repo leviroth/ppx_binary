@@ -25,56 +25,50 @@ let basic_types =
     ; ("int64", {module_name= "Int64"; byte_size= 8})
     ; ("int128", {module_name= "Int128"; byte_size= 16}) ]
 
-let get_name ~direction_string ?endianness typ =
+let converter_name typ ~direction_string ~if_basic ~target_type =
   match typ with
-  | Lident s -> (match String_dict.find basic_types s with
-      | Some {module_name} ->
-        let endianness =
-          match endianness with
-          | Some e -> e
-          | None -> Location.raise_errorf "Endianness required"
-        in
-        Ldot (lident module_name,
-              Printf.sprintf "%s_bytes_%s_endian"
-                direction_string
-                endianness)
+  | Lident s ->
+    begin match String_dict.find basic_types s with
+      | Some {module_name} -> if_basic module_name
       | None ->
         match s with
-        | "t" -> lident @@ Printf.sprintf "%s_bytes" direction_string
-        | s -> lident @@ Printf.sprintf "%s_%s_bytes" s direction_string)
+        | "t" ->
+          lident @@ Printf.sprintf "%s_%s" direction_string target_type
+        | s ->
+          lident @@ Printf.sprintf "%s_%s_%s" s direction_string target_type end
   | Ldot (t, s) ->
     let new_s =
       match s with
-      | "t" -> Printf.sprintf "%s_bytes" direction_string
-      | s -> Printf.sprintf "%s_%s_bytes" s direction_string
+      | "t" -> Printf.sprintf "%s_%s" direction_string target_type
+      | s -> Printf.sprintf "%s_%s_%s" s direction_string target_type
     in
     Ldot (t, new_s)
   | _ -> Location.raise_errorf "Lapply not implemented"
 
-let get_int_converter ~direction_string typ =
-  match typ with
-  | Lident s -> (match String_dict.find basic_types s with
-      | Some {module_name} ->
-        Ldot (lident module_name,
-              Printf.sprintf "%s_int"
-                direction_string)
-      | None ->
-        match s with
-        | "t" -> lident @@ Printf.sprintf "%s_int" direction_string
-        | s -> lident @@ Printf.sprintf "%s_%s_int" s direction_string)
-  | Ldot (t, s) ->
-    let new_s =
-      match s with
-      | "t" -> Printf.sprintf "%s_int" direction_string
-      | s -> Printf.sprintf "%s_%s_int" s direction_string
+let bytes_converter typ ?endianness ~direction_string =
+  let if_basic module_name =
+    let endianness =
+      match endianness with
+      | Some e -> e
+      | None -> Location.raise_errorf "Endianness required"
     in
-    Ldot (t, new_s)
-  | _ -> Location.raise_errorf "Lapply not implemented"
+    Ldot (lident module_name,
+          Printf.sprintf "%s_bytes_%s_endian"
+            direction_string
+            endianness)
+  in
+  converter_name typ ~direction_string ~if_basic ~target_type:"bytes"
+
+let int_converter typ ~direction_string =
+  let if_basic module_name =
+    Ldot (lident module_name, Printf.sprintf "%s_int" direction_string)
+  in
+  converter_name typ ~direction_string ~if_basic ~target_type:"int"
 
 let read_expr typ ?endianness ~masking ~loc =
   let read_buf_fn =
     Exp.mk ~loc
-    @@ Pexp_ident {txt=get_name ~direction_string:"of" ?endianness typ; loc}
+    @@ Pexp_ident {txt=bytes_converter ~direction_string:"of" ?endianness typ; loc}
   in
   let read_buf_expr = [%expr [%e read_buf_fn] buf offset] in
   match masking with
@@ -82,7 +76,7 @@ let read_expr typ ?endianness ~masking ~loc =
   | true ->
     let converter =
       let txt =
-        get_int_converter ~direction_string:"to" typ
+        int_converter ~direction_string:"to" typ
       in
       Exp.mk ~loc @@ Pexp_ident {txt; loc}
     in
@@ -91,14 +85,14 @@ let read_expr typ ?endianness ~masking ~loc =
 let write_expr typ ?endianness ~masking ~loc =
   let write_buf_fn =
     Exp.mk ~loc
-    @@ Pexp_ident {txt=get_name ~direction_string:"to" ?endianness typ; loc}
+    @@ Pexp_ident {txt=bytes_converter ~direction_string:"to" ?endianness typ; loc}
   in
     match masking with
     | false -> [%expr fun data -> [%e write_buf_fn] data buf offset]
     | true ->
       let converter =
         let txt =
-          get_int_converter ~direction_string:"of" typ
+          int_converter ~direction_string:"of" typ
         in
         Exp.mk ~loc @@ Pexp_ident {txt; loc}
       in
