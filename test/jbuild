@@ -1,0 +1,13 @@
+(jbuild_version 1)
+
+(executable
+ ((name        main)
+  (libraries   (base
+                ounit))
+  (flags (:standard -short-paths))
+  (preprocess (pps (ppx_binary)))))
+
+(alias
+ ((name    runtest)
+  (deps    (main.exe))
+  (action  (run ${<}))))
