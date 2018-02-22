@@ -87,7 +87,6 @@ module Gen_str = struct
               in
               [%expr (fun buf offset -> [%e fn] buf offset |> [%e converter])]
           in
-          (* (match type_name with Lident s | Ldot (_, s)-> print_endline s | _ -> assert false); *)
           let offset_increment = Typeinfo.size_expr ~loc type_name in
           let offset_expr = [%expr offset + [%e offset_increment]] in
           [%expr [%e fn] buf offset, [%e offset_expr]]
