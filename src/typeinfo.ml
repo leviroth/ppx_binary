@@ -2,8 +2,9 @@ open Ppx_core
 open Ast_builder.Default
 open Ast_helper
 
-type t = {module_name: string; byte_size: int}
-let known_types =
+type basic_type_info = {module_name: string; byte_size: int}
+
+let basic_types =
   String_dict.of_alist_exn
     [ ("uint8", {module_name= "Uint8"; byte_size= 1})
     ; ("uint16", {module_name= "Uint16"; byte_size= 2})
@@ -26,7 +27,7 @@ let known_types =
 
 let get_name ~direction_string ?endianness typ =
   match typ with
-  | Lident s -> (match String_dict.find known_types s with
+  | Lident s -> (match String_dict.find basic_types s with
       | Some {module_name} ->
         let endianness =
           match endianness with
@@ -52,7 +53,7 @@ let get_name ~direction_string ?endianness typ =
 
 let get_int_converter ~direction_string typ =
   match typ with
-  | Lident s -> (match String_dict.find known_types s with
+  | Lident s -> (match String_dict.find basic_types s with
       | Some {module_name} ->
         Ldot (lident module_name,
               Printf.sprintf "%s_int"
@@ -70,13 +71,44 @@ let get_int_converter ~direction_string typ =
     Ldot (t, new_s)
   | _ -> Location.raise_errorf "Lapply not implemented"
 
-let reader_name = get_name ~direction_string:"of"
-let writer_name = get_name ~direction_string:"to"
+let read_expr typ ?endianness ~masking ~loc =
+  let read_buf_fn =
+    Exp.mk ~loc
+    @@ Pexp_ident {txt=get_name ~direction_string:"of" ?endianness typ; loc}
+  in
+  let read_buf_expr = [%expr [%e read_buf_fn] buf offset] in
+  match masking with
+  | false -> read_buf_expr
+  | true ->
+    let converter =
+      let txt =
+        get_int_converter ~direction_string:"to" typ
+      in
+      Exp.mk ~loc @@ Pexp_ident {txt; loc}
+    in
+    [%expr ([%e read_buf_expr] |> [%e converter])]
 
-let size_expr ~loc typ =
+let write_expr typ ?endianness ~masking ~loc =
+  let write_buf_fn =
+    Exp.mk ~loc
+    @@ Pexp_ident {txt=get_name ~direction_string:"to" ?endianness typ; loc}
+  in
+    match masking with
+    | false -> [%expr fun data -> [%e write_buf_fn] data buf offset]
+    | true ->
+      let converter =
+        let txt =
+          get_int_converter ~direction_string:"of" typ
+        in
+        Exp.mk ~loc @@ Pexp_ident {txt; loc}
+      in
+      [%expr (fun data ->
+          let data = [%e converter] data in [%e write_buf_fn] data buf offset)]
+
+let byte_size_expr typ ~loc =
   Exp.mk ~loc @@
   match typ with
-  | Lident s -> (match String_dict.find known_types s with
+  | Lident s -> (match String_dict.find basic_types s with
       | Some {byte_size} ->
         Pexp_constant (Pconst_integer (Int.to_string byte_size, None))
       | None ->

@@ -3,210 +3,164 @@ open Ast_builder.Default
 open Ast_helper
 open Ppx_type_conv.Std
 
+type field_info =
+  { name: string Asttypes.loc
+  ; disk_type: longident
+  ; masking: bool
+  ; endianness: string option
+  ; read_expr: expression
+  ; write_expr: expression
+  ; byte_size_expr: expression }
+
 let endianness =
   Attribute.declare "binary.endianness" Attribute.Context.label_declaration
     Ast_pattern.(pstr (pstr_eval (pexp_ident (lident __)) nil ^:: nil))
-    (fun x -> x )
+    (fun x -> x)
+
 
 let masking =
   Attribute.declare "binary.masking" Attribute.Context.label_declaration
     Ast_pattern.(pstr (pstr_eval (pexp_ident (lident __)) nil ^:: nil))
-    (fun x -> x )
+    (fun x -> x)
 
 
 let lident_loc_of_string_loc x = {x with txt= Lident x.txt}
 
-module Gen_str = struct
-  let size lds name loc =
-    let sizes =
-      List.map lds ~f:(fun ({pld_type} as ld) ->
-          match pld_type with
-          | {ptyp_desc= Ptyp_constr ({txt}, []); ptyp_loc=loc} ->
-            let txt =
-              match Attribute.get masking ld with
-              | None -> txt
-              | Some s -> Lident s
-            in
-            Typeinfo.size_expr ~loc txt
-          | {ptyp_loc} ->
-            Location.raise_errorf ~loc:ptyp_loc "Could not handle type")
-    in
-    let size_expr =
-      List.reduce_exn sizes ~f:(fun x y -> [%expr [%e x] + [%e y]])
-    in
-    let name = match name with
-      | {txt="t"} -> [%pat? byte_size]
-      | {txt=s} ->
+let to_info ({pld_name; pld_type; pld_loc= loc} as ld) ~default_endianness =
+  let masking, disk_type =
+    match pld_type with
+    | {ptyp_desc= Ptyp_constr ({txt}, [])} -> (
+      match Attribute.get masking ld with
+      | None -> (false, txt)
+      | Some s -> (true, Lident s) )
+    | {ptyp_loc} -> Location.raise_errorf ~loc "Could not handle type"
+  in
+  let endianness =
+    Option.first_some default_endianness @@ Attribute.get endianness ld
+  in
+  { name= pld_name
+  ; disk_type
+  ; masking
+  ; endianness
+  ; read_expr= Typeinfo.read_expr disk_type ?endianness ~masking ~loc
+  ; write_expr= Typeinfo.write_expr disk_type ?endianness ~masking ~loc
+  ; byte_size_expr= Typeinfo.byte_size_expr disk_type ~loc }
+
+
+(** Convert a list of assignments [p1 = e1; ...; pn = en] and a final expression
+   [expr] into the expression [let p1 = e1 in let ... in let pn = en in expr].
+   *)
+let stitch l ~final_expression ~loc =
+  let rec aux l acc =
+    match l with
+    | [] -> acc
+    | hd :: tl -> aux tl @@ pexp_let ~loc Nonrecursive [hd] acc
+  in
+  aux (List.rev l) final_expression
+
+
+let size record_name ~info_list ~loc =
+  let sizes = List.map info_list ~f:(fun {byte_size_expr} -> byte_size_expr) in
+  let size_expr =
+    List.reduce_exn sizes ~f:(fun x y -> [%expr [%e x] + [%e y]])
+  in
+  let name =
+    match record_name with
+    | {txt= "t"} -> [%pat? byte_size]
+    | {txt= s} ->
         let s = Printf.sprintf "byte_size_%s" s in
-        ppat_var ~loc {txt=s; loc}
-    in
-    [%stri let [%p name] = [%e size_expr]]
+        ppat_var ~loc {record_name with txt= s}
+  in
+  [%stri let [%p name] = [%e size_expr]]
 
+
+let offset_expr {byte_size_expr} ~loc = [%expr offset + [%e byte_size_expr]]
+
+let writer_fn record_name ~info_list ~loc =
+  let fn_name =
+    { record_name with
+      txt= (match record_name.txt with "t" -> "to_bytes" | s -> s ^ "_to_bytes")
+    }
+  in
+  let writes =
+    List.map info_list ~f:(fun info ->
+        let write_expr = info.write_expr in
+        let data_field =
+          pexp_field ~loc [%expr data]
+          @@ lident_loc_of_string_loc info.name
+        in
+        let expr =
+          [%expr ([%e write_expr] [%e data_field], [%e offset_expr info ~loc])]
+        in
+        value_binding ~loc ~pat:[%pat? (), offset] ~expr )
+  in
+  let expr = stitch writes ~final_expression:[%expr ()] ~loc in
+  let expr = [%expr fun data buf offset -> [%e expr]] in
+  let binding =
+    { pvb_pat= ppat_var ~loc fn_name
+    ; pvb_expr= expr
+    ; pvb_attributes= []
+    ; pvb_loc= loc }
+  in
+  {pstr_desc= Pstr_value (Nonrecursive, [binding]); pstr_loc= loc}
+
+
+let reader_fn record_name ~info_list ~loc =
+  let build_fn final_expression =
+    let assignments =
+      List.map info_list ~f:(fun ({name; read_expr} as info) ->
+          let pattern = ppat_var ~loc name in
+          let expr = [%expr ([%e read_expr], [%e offset_expr info ~loc])] in
+          value_binding ~loc ~pat:[%pat? [%p pattern], offset] ~expr )
+    in
+    let expr = stitch assignments ~final_expression ~loc in
+    [%expr fun buf offset -> [%e expr]]
+  in
+  let record_fields =
+    List.map info_list ~f:(fun {name} ->
+        let lident_loc = lident_loc_of_string_loc name in
+        (lident_loc, pexp_ident ~loc:name.loc lident_loc) )
+  in
+  let final_expression = pexp_record ~loc record_fields None in
+  let fn_name =
+    { record_name with
+      txt= (match record_name.txt with "t" -> "of_bytes" | s -> s ^ "_of_bytes")
+    }
+  in
+  let binding =
+    { pvb_pat= ppat_var ~loc fn_name
+    ; pvb_expr= build_fn final_expression
+    ; pvb_attributes= []
+    ; pvb_loc= loc }
+  in
+  {pstr_desc= Pstr_value (Nonrecursive, [binding]); pstr_loc= loc}
+
+
+let structure_of_td ~default_endianness = function
+  | {ptype_kind= Ptype_record l; ptype_name; ptype_loc= loc} ->
+      let info_list = List.map l ~f:(to_info ~default_endianness) in
+      [ size ptype_name ~info_list ~loc
+      ; reader_fn ptype_name ~info_list ~loc
+      ; writer_fn ptype_name ~info_list ~loc ]
+  | _ -> []
+
+
+module Gen_str = struct
   let generate ~loc ~path:_ (rec_flag, tds) default_endianness =
-    let get_default_endianness ~loc =
+    let default_endianness =
       Option.map default_endianness ~f:(function
-          | "little" | "big" as s -> s
-          | _ ->
+        | ("little" | "big") as s -> s
+        | _ ->
             Location.raise_errorf ~loc
-              "Default endianness must be little or big")
+              "Default endianness must be little or big" )
     in
-    let extract_type_name = function
-      | {ptyp_desc= Ptyp_constr ({txt}, [])} -> txt
-      | {ptyp_loc} -> Location.raise_errorf ~loc:ptyp_loc "Could not handle type"
-    in
-    let read_or_write_expression ld direction =
-      let loc = ld.pld_loc in
-      let type_name =
-        match Attribute.get masking ld with
-        | Some s -> Lident s
-        | None -> extract_type_name ld.pld_type
-      in
-      let endianness =
-        match Attribute.get endianness ld with
-        | Some ("little" | "big" as s) -> Some s
-        | Some _ ->
-            Location.raise_errorf ~loc
-              "Endianness must be little or big"
-        | None -> get_default_endianness ~loc
-      in
-      match direction with
-      | `Read ->
-          let fn =
-            Exp.mk ~loc
-            @@ Pexp_ident {txt=Typeinfo.reader_name ?endianness type_name; loc}
-          in
-          let fn =
-            match Attribute.get masking ld with
-            | None -> fn
-            | Some _ ->
-              let converter =
-                let txt =
-                  Typeinfo.get_int_converter ~direction_string:"to" type_name
-                in
-                Exp.mk ~loc @@ Pexp_ident {txt; loc}
-              in
-              [%expr (fun buf offset -> [%e fn] buf offset |> [%e converter])]
-          in
-          let offset_increment = Typeinfo.size_expr ~loc type_name in
-          let offset_expr = [%expr offset + [%e offset_increment]] in
-          [%expr [%e fn] buf offset, [%e offset_expr]]
-      | `Write ->
-          let fn =
-            Exp.mk ~loc
-            @@ Pexp_ident {txt=Typeinfo.writer_name ?endianness type_name; loc}
-          in
-          let fn =
-            match Attribute.get masking ld with
-            | None -> fn
-            | Some _ ->
-              let converter =
-                let txt =
-                  Typeinfo.get_int_converter ~direction_string:"of" type_name
-                in
-                Exp.mk ~loc @@ Pexp_ident {txt; loc}
-              in
-              [%expr (fun data buf offset -> let data = [%e converter] data in [%e fn] data buf offset)]
-          in
-          let data_field =
-            pexp_field ~loc [%expr data]
-            @@ lident_loc_of_string_loc ld.pld_name
-          in
-          [%expr [%e fn] [%e data_field] buf offset]
-    in
-    let build_field_assignments : label_declaration list -> value_binding list =
-      fun l ->
-        let pats = List.map l ~f:(fun ld -> ppat_var ~loc ld.pld_name) in
-        let exprs = List.map l ~f:(fun ld -> read_or_write_expression ld `Read) in
-        List.map2_exn pats exprs ~f:(fun pat expr ->
-            value_binding ~loc ~pat:[%pat? [%p pat], offset] ~expr )
-    in
-    let stitch l final loc =
-      let rec aux l acc =
-        match l with
-        | [] -> acc
-        | hd :: tl -> aux tl @@ pexp_let ~loc Nonrecursive [hd] acc
-      in
-      aux (List.rev l) final
-    in
-    let build_fn
-      : location -> expression -> label_declaration list -> expression =
-      fun loc final_expression label_declarations ->
-        let assignments = build_field_assignments label_declarations in
-        let expr = stitch assignments final_expression loc in
-        [%expr fun buf offset -> [%e expr]]
-    in
-    let writer_fn =
-      fun lds type_name loc ->
-        let fn_name =
-          { type_name with
-            txt=
-              ( match type_name.txt with
-              | "t" -> "to_bytes"
-              | s -> s ^ "_to_bytes" ) }
-        in
-        let writes = List.map lds ~f:(fun ld ->
-            let type_name = extract_type_name ld.pld_type in
-            let type_name =
-              match Attribute.get masking ld with
-              | Some s -> Lident s
-              | None -> type_name
-            in
-            let offset_increment = Typeinfo.size_expr ~loc type_name in
-            let offset_expr = [%expr offset + [%e offset_increment]] in
-            let read_expr = read_or_write_expression ld `Write in
-            let expr = [%expr [%e read_expr], [%e offset_expr]] in
-            value_binding ~loc ~pat:[%pat? (), offset] ~expr)
-        in
-        let expr = stitch writes [%expr ()] loc in
-        let expr = [%expr fun data buf offset -> [%e expr]] in
-        let binding =
-          { pvb_pat= ppat_var ~loc fn_name
-          ; pvb_expr= expr
-          ; pvb_attributes= []
-          ; pvb_loc= loc }
-        in
-        {pstr_desc= Pstr_value (Nonrecursive, [binding]); pstr_loc= loc}
-    in
-    let reader_fn
-      : label_declaration list -> string Asttypes.loc -> Location.t
-        -> structure_item =
-      fun l type_name loc ->
-        let record_fields =
-          List.map l ~f:(fun {pld_name; pld_loc} ->
-              let lident_loc = lident_loc_of_string_loc pld_name in
-              (lident_loc, pexp_ident ~loc lident_loc) )
-        in
-        let tail_expression = pexp_record ~loc record_fields None in
-        let fn_name =
-          { type_name with
-            txt=
-              ( match type_name.txt with
-                | "t" -> "of_bytes"
-                | s -> s ^ "_of_bytes" ) }
-        in
-        let binding =
-          { pvb_pat= ppat_var ~loc fn_name
-          ; pvb_expr= build_fn loc tail_expression l
-          ; pvb_attributes= []
-          ; pvb_loc= loc }
-        in
-        {pstr_desc= Pstr_value (Nonrecursive, [binding]); pstr_loc= loc}
-    in
-    let structure_of_td : type_declaration -> structure = function
-      | {ptype_kind= Ptype_record l; ptype_name; ptype_loc} ->
-        [size l ptype_name ptype_loc;
-         reader_fn l ptype_name ptype_loc;
-         writer_fn l ptype_name ptype_loc]
-      | _ -> []
-    in
-    List.concat_map ~f:structure_of_td tds
-
+    List.concat_map ~f:(structure_of_td ~default_endianness) tds
 end
 
 module Gen_sig = struct
-  let reader_type ~loc ty = [%type : Bytes.t -> int -> [%t ty]]
+  let reader_type ~loc ty = [%type: Bytes.t -> int -> [%t ty]]
 
-  let writer_type ~loc ty = [%type : [%t ty] -> Bytes.t -> int -> unit]
+  let writer_type ~loc ty = [%type: [%t ty] -> Bytes.t -> int -> unit]
 
   let generate ~loc ~path:_ (rec_flag, tds) =
     let reader_fn_item ({ptype_name; ptype_loc= loc} as td) =
@@ -229,31 +183,28 @@ module Gen_sig = struct
     in
     let structure_of_td : type_declaration -> signature = function
       | {ptype_kind= Ptype_record _; ptype_name; ptype_loc} as td ->
-        let size_item =
-          let size_name = {
-            ptype_name with txt =
-                              match ptype_name.txt with
-                              | "t" -> "byte_size"
-                              | s -> Printf.sprintf "byte_size_%s" s}
+          let size_item =
+            let size_name =
+              { ptype_name with
+                txt=
+                  ( match ptype_name.txt with
+                  | "t" -> "byte_size"
+                  | s -> Printf.sprintf "byte_size_%s" s ) }
+            in
+            { psig_desc=
+                Psig_value
+                  (Ast_builder.Default.value_description ~loc:ptype_loc
+                     ~name:size_name
+                     ~type_:
+                       (ptyp_constr ~loc:ptype_loc
+                          {txt= lident "int"; loc= ptype_loc} [])
+                     ~prim:[])
+            ; psig_loc= ptype_loc }
           in
-          {psig_desc =
-             Psig_value
-               (Ast_builder.Default.value_description
-                  ~loc:ptype_loc
-                  ~name:size_name
-                  ~type_:(ptyp_constr
-                            ~loc:ptype_loc
-                            {txt=lident "int"; loc=ptype_loc}
-                            [])
-                  ~prim:[]);
-           psig_loc = ptype_loc}
-        in
-        [size_item;
-         reader_fn_item td; writer_fn_item td]
+          [size_item; reader_fn_item td; writer_fn_item td]
       | _ -> []
     in
     List.concat_map ~f:structure_of_td tds
-
 end
 
 let () =

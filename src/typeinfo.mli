@@ -1,9 +1,9 @@
 open Ppx_core
 
-val reader_name : ?endianness:string -> longident -> longident
+val read_expr :
+  longident -> ?endianness:string -> masking:bool -> loc:location -> expression
 
-val writer_name : ?endianness:string -> longident -> longident
+val write_expr :
+  longident -> ?endianness:string -> masking:bool -> loc:location -> expression
 
-val get_int_converter : direction_string:string -> longident -> longident
-
-val size_expr : loc:Location.t -> longident -> Parsetree.expression
+val byte_size_expr : longident -> loc:location -> expression
