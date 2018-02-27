@@ -59,10 +59,10 @@ would be named `foo_of_bytes`, `foo_to_bytes`, and `byte_size_foo`.)
 
 ### Masking with `int`
 
-Unfortunately, OCaml's lack of typeclasses means that there are different
-functions corresponding to each different type in the Stdint library. If you
-want to multiply a `uint16` by 2, you will need to perform explicit conversions
-such as `UInt16.(n * (of_int 2))`.
+Unfortunately, OCaml's type system requires that there are different functions
+corresponding to each different type in the Stdint library. If you want to
+multiply a `uint16` by 2, you will need to perform explicit conversions such as
+`UInt16.(n * (of_int 2))`.
 
 As an alternative, ppx\_binary can be told to automatically convert to and from
 OCaml's built-in `int` type:
