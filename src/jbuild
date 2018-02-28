@@ -2,6 +2,7 @@
 
 (library
  ((name        ppx_binary)
+  (public_name ppx_binary)
   (kind ppx_rewriter)
   (ppx_runtime_libraries (stdint))
   (synopsis "Convert records to and from binary data")
